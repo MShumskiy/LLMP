@@ -137,7 +137,7 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None):
+    def generate_response(self,model,system_prompt,prompt,format=None,image=None):
         """
         Sends a request to the LLM API and returns the response.
         """
@@ -162,8 +162,23 @@ class ModelOperatorOllama():
             "stream": False
         }
         
+        if image:
+            import base64
+            
+            encoded_image = []
+            filepath = rf"{image}"
+            with open(filepath, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
+                encoded_image.append(encoded_string)
+            
+            payload["messages"][1]["images"] = encoded_image
+            payload["model"] = 'llava:latest'
+                
+            #payload.update({'images':encoded_image})
+        
         if format:
             payload.update(format)
+            
 
         headers = {"Content-Type": "application/json"}
         
@@ -172,7 +187,6 @@ class ModelOperatorOllama():
         # get generation timestamp
         
         response_json = response.json()
-        
         response_json.update({'system_prompt':system_prompt})
         response_json.update({'prompt':prompt})
         response_json.update({'timestamp':timestamp})
