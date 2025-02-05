@@ -76,10 +76,11 @@ class ModelOperatorOllama():
         Checks if gen_hist table exists, if not creates it.
         """
         table_creation_query = """
-        CREATE TABLE IF NOT EXISTS generation_history (
+        CREATE TABLE IF NOT EXISTS generation_history_v2 (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             gen_id TEXT,
             gen_timestamp TEXT,
+            caller_address TEXT,
             model TEXT,
             system_prompt TEXT,
             prompt TEXT,
@@ -94,7 +95,7 @@ class ModelOperatorOllama():
         self.cursor.execute(table_creation_query)
         
         
-    def save_to_db(self, generation_data):
+    def save_to_db(self, generation_data, ip_address=None):
         """
         Saves the generated response to PostgreSQL.
         
@@ -105,11 +106,12 @@ class ModelOperatorOllama():
             # Map JSON keys to table columns
             db_columns = {
                 "gen_id": generation_data.get("gen_id"),
+                "caller_address": ip_address,
                 "gen_timestamp": generation_data.get("timestamp"),
                 "model": generation_data.get("model"),
                 "system_prompt": generation_data.get("system_prompt"),
                 "prompt": generation_data.get("prompt"),
-                "gent_text": generation_data.get("message", {}).get("content"),
+                "gent_text": generation_data.get("message", {}).get("content").replace("\n", " "),
                 "prompt_eval_count": generation_data.get("prompt_eval_count"),
                 "eval_count": generation_data.get("eval_count"),
                 "load_duration": generation_data.get("load_duration"),
@@ -123,7 +125,7 @@ class ModelOperatorOllama():
             values = tuple(db_columns.values())
 
             insert_query = f"""
-            INSERT INTO generation_history ({columns})
+            INSERT INTO generation_history_v2 ({columns})
             VALUES ({placeholders});
             """
 
@@ -137,7 +139,7 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None,image=None):
+    def generate_response(self,model,system_prompt,prompt,format=None,image=None,ip_address=None):
         """
         Sends a request to the LLM API and returns the response.
         """
@@ -196,7 +198,7 @@ class ModelOperatorOllama():
         response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
         
         print('saving data')
-        self.save_to_db(response_json)
+        self.save_to_db(response_json,ip_address)
 
         return response_json
         
