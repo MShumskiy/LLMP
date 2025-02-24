@@ -6,13 +6,9 @@ from src.model_operator import ModelOperatorOllama
 
 load_dotenv()
 auth_key = os.getenv('authentication_key')
-allowed_ips = {"192.168.1.219",
-               "192.168.0.104",
-               "192.168.1.76",
-               "192.168.1.79",
-               "192.168.3.100",
-               "89.114.114.178"
-               }
+allowed_ips_env = os.getenv("ALLOWED_IPS")
+allowed_ips = allowed_ips_env.split(",")
+allowed_ips = {ip for ip in allowed_ips}
 
 app = FastAPI()
 
