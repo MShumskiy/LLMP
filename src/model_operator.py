@@ -76,8 +76,9 @@ class ModelOperatorOllama():
         Checks if gen_hist table exists, if not creates it.
         """
         table_creation_query = """
-        CREATE TABLE IF NOT EXISTS generation_history_v2 (
+        CREATE TABLE IF NOT EXISTS generation_history_v3 (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            src TEXT,
             gen_id TEXT,
             gen_timestamp TEXT,
             caller_address TEXT,
@@ -105,6 +106,7 @@ class ModelOperatorOllama():
         try:
             # Map JSON keys to table columns
             db_columns = {
+                "src":generation_data.get("src"),
                 "gen_id": generation_data.get("gen_id"),
                 "caller_address": ip_address,
                 "gen_timestamp": generation_data.get("timestamp"),
@@ -125,7 +127,7 @@ class ModelOperatorOllama():
             values = tuple(db_columns.values())
 
             insert_query = f"""
-            INSERT INTO generation_history_v2 ({columns})
+            INSERT INTO generation_history_v3 ({columns})
             VALUES ({placeholders});
             """
 
@@ -139,7 +141,7 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None):
+    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None, src = None):
         """
         Sends a request to the LLM API and returns the response.
         """
@@ -197,6 +199,7 @@ class ModelOperatorOllama():
         response_json['prompt_eval_duration'] = round(response_json['prompt_eval_duration']/(10**9),2)
         response_json['eval_duration'] = round(response_json['eval_duration']/(10**9),2)
         response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
+        response_json['src'] = src
         
         print('saving data')
         self.save_to_db(response_json,ip_address)
