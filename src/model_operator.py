@@ -112,7 +112,7 @@ class ModelOperatorOllama():
                 "gen_timestamp": generation_data.get("timestamp"),
                 "model": generation_data.get("model"),
                 "system_prompt": generation_data.get("system_prompt"),
-                "prompt": generation_data.get("prompt"),
+                "prompt": generation_data.get("prompt").replace("\n", " "),
                 "gent_text": generation_data.get("message", {}).get("content").replace("\n", " "),
                 "prompt_eval_count": generation_data.get("prompt_eval_count"),
                 "eval_count": generation_data.get("eval_count"),
