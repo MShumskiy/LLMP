@@ -38,6 +38,7 @@ class GenerateRequest(BaseModel):
     image: str = None
     tools:list[dict] = None
     src: str = None
+    temperature: float = 0.5
     
 
 @app.get("/models", dependencies=[Depends(authenticate)])
@@ -63,7 +64,8 @@ def generate_response(request: Request, body: GenerateRequest):
             image=body.image,
             tools=body.tools,
             ip_address=ip_address,
-            src=body.src
+            src=body.src,
+            temperature = body.temperature
         )
         return response
     except Exception as e:

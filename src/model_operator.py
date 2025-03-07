@@ -76,7 +76,7 @@ class ModelOperatorOllama():
         Checks if gen_hist table exists, if not creates it.
         """
         table_creation_query = """
-        CREATE TABLE IF NOT EXISTS generation_history_v3 (
+        CREATE TABLE IF NOT EXISTS generation_history_v4 (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             src TEXT,
             gen_id TEXT,
@@ -85,12 +85,13 @@ class ModelOperatorOllama():
             model TEXT,
             system_prompt TEXT,
             prompt TEXT,
-            gent_text TEXT,
+            gen_text TEXT,
             prompt_eval_count INT,
             eval_count INT,
             load_duration FLOAT,
             prompt_eval_duration FLOAT,
-            eval_duration FLOAT
+            eval_duration FLOAT,
+            temperature FLOAT
         );
         """
         self.cursor.execute(table_creation_query)
@@ -113,12 +114,13 @@ class ModelOperatorOllama():
                 "model": generation_data.get("model"),
                 "system_prompt": generation_data.get("system_prompt"),
                 "prompt": generation_data.get("prompt").replace("\n", " "),
-                "gent_text": generation_data.get("message", {}).get("content").replace("\n", " "),
+                "gen_text": generation_data.get("message", {}).get("content").replace("\n", " "),
                 "prompt_eval_count": generation_data.get("prompt_eval_count"),
                 "eval_count": generation_data.get("eval_count"),
                 "load_duration": generation_data.get("load_duration"),
                 "prompt_eval_duration": generation_data.get("prompt_eval_duration"),
                 "eval_duration": generation_data.get("eval_duration"),
+                "temperature": generation_data.get("temperature")
             }
 
             # Generate dynamic SQL query
@@ -127,7 +129,7 @@ class ModelOperatorOllama():
             values = tuple(db_columns.values())
 
             insert_query = f"""
-            INSERT INTO generation_history_v3 ({columns})
+            INSERT INTO generation_history_v4 ({columns})
             VALUES ({placeholders});
             """
 
@@ -141,7 +143,7 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None, src = None):
+    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None, src = None, temperature = 0.5):
         """
         Sends a request to the LLM API and returns the response.
         """
@@ -164,8 +166,10 @@ class ModelOperatorOllama():
                 'content':prompt}
                 ],
             "stream": False,
-            "tools": tools
-        }
+            "tools": tools,
+            "options": {
+                "temperature": temperature
+        }}
         
         if image:
             import base64
@@ -200,6 +204,7 @@ class ModelOperatorOllama():
         response_json['eval_duration'] = round(response_json['eval_duration']/(10**9),2)
         response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
         response_json['src'] = src
+        response_json['temperature'] = temperature
         
         print('saving data')
         self.save_to_db(response_json,ip_address)
