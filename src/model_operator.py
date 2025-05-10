@@ -167,6 +167,7 @@ class ModelOperatorOllama():
                 ],
             "stream": False,
             "tools": tools,
+            "format": format,
             "options": {
                 "temperature": temperature
         }}
