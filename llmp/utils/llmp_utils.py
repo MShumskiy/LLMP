@@ -7,7 +7,7 @@ from requests.exceptions import RequestException
 
 llmp_url = os.getenv("LLMP_URL")
 llmp_password = os.getenv("LLMP_PASSWORD")
-
+print (llmp_url)
 
 class GenerateRequest(BaseModel):
     model: str

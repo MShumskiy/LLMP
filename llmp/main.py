@@ -2,7 +2,8 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from src.model_operator import ModelOperatorOllama
+from llmp.model_operator import ModelOperatorOllama
+import uvicorn
 
 load_dotenv()
 auth_key = os.getenv('authentication_key')
@@ -72,4 +73,7 @@ def generate_response(request: Request, body: GenerateRequest):
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {e}")
+    
+def run():
+    uvicorn.run("llmp.main:app", host="0.0.0.0", port=8000, reload=False)
     
