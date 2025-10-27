@@ -59,14 +59,74 @@ A FastAPI-based platform for serving local Large Language Models (LLMs) with aut
    ```
 
 4. **Start the server**
+
+   **Option 1: Use the startup scripts (Recommended)**
+   
+   For Windows users, use the convenient startup scripts that handle both Ollama and LLMP:
+   
+   - **Batch Script**: Double-click `start_llmp.bat` or run from command prompt
+     ```batch
+     start_llmp.bat
+     ```
+   
+   - **PowerShell Script**: Run in PowerShell (more robust with error handling)
+     ```powershell
+     .\start_llmp.ps1
+     ```
+
+   **Option 2: Manual startup**
    ```bash
+   # Terminal 1: Start Ollama
+   ollama serve
+   
+   # Terminal 2: Start LLMP
    poetry run uvicorn app:app --host 0.0.0.0 --port 8000 --reload
    ```
 
-   Or using the poetry script:
+   **Option 3: Using poetry script**
    ```bash
    poetry run llmp-api
    ```
+
+## 🎯 Startup Scripts
+
+LLMP includes convenient startup scripts that automatically handle both Ollama and LLMP initialization:
+
+### `start_llmp.bat` (Windows Batch)
+- ✅ **Simple & Fast**: Easy double-click execution
+- ✅ **Dependency Checking**: Verifies Ollama and Poetry are installed
+- ✅ **Auto .env Creation**: Creates template if missing
+- ✅ **Background Ollama**: Runs Ollama server in minimized window
+- ✅ **Clean Startup**: Handles service initialization automatically
+
+### `start_llmp.ps1` (PowerShell)
+- ✅ **Advanced Features**: Comprehensive error handling and cleanup
+- ✅ **Health Checks**: Waits for Ollama to be ready before starting LLMP
+- ✅ **Colored Output**: Clear status messages and progress indicators
+- ✅ **Graceful Shutdown**: Properly stops both services on Ctrl+C
+- ✅ **Smart Retry Logic**: Automatically retries Ollama connection
+
+### What the Scripts Do:
+1. **Check Prerequisites**: Verify Ollama and Poetry installation
+2. **Environment Setup**: Create `.env` template if missing
+3. **Start Ollama**: Launch `ollama serve` in background
+4. **Health Verification**: Ensure Ollama is responding (PowerShell only)
+5. **Start LLMP**: Run the FastAPI server with hot reload
+6. **Display Info**: Show server URLs and API documentation links
+
+### Usage:
+```bash
+# Windows Batch (double-click or command prompt)
+start_llmp.bat
+
+# PowerShell (recommended)
+.\start_llmp.ps1
+```
+
+**Access Points:**
+- 🌐 **API Server**: http://localhost:8000
+- 📖 **API Documentation**: http://localhost:8000/docs
+- 🔍 **API Schema**: http://localhost:8000/redoc
 
 ## 🔧 API Endpoints
 
@@ -276,6 +336,8 @@ LLMP/
 │   └── utils/
 │       └── llmp_utils.py   # Client utilities for API calls
 ├── app.py                  # Application entry point
+├── start_llmp.bat          # Windows batch startup script
+├── start_llmp.ps1          # PowerShell startup script (recommended)
 ├── analysis.ipynb         # Analytics and monitoring notebook
 ├── example_usage.ipynb    # Usage examples and documentation
 ├── Dockerfile             # Container configuration
