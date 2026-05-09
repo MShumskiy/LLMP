@@ -106,22 +106,25 @@ class ModelOperatorOllama():
         - generation_data (dict): JSON object containing generation details.
         """
         try:
+            meta = generation_data.get("response_metadata", {})
+            usage = generation_data.get("usage", {})
+            content = (generation_data.get("choices") or [{}])[0].get("message", {}).get("content", "")
             # Map JSON keys to table columns
             db_columns = {
-                "src":generation_data.get("src"),
-                "gen_id": generation_data.get("gen_id"),
+                "src": meta.get("src"),
+                "gen_id": generation_data.get("id"),
                 "caller_address": ip_address,
-                "gen_timestamp": generation_data.get("timestamp"),
+                "gen_timestamp": meta.get("timestamp"),
                 "model": generation_data.get("model"),
-                "system_prompt": generation_data.get("system_prompt"),
-                "prompt": generation_data.get("prompt").replace("\n", " "),
-                "gen_text": generation_data.get("message", {}).get("content").replace("\n", " "),
-                "prompt_eval_count": generation_data.get("prompt_eval_count"),
-                "eval_count": generation_data.get("eval_count"),
-                "load_duration": generation_data.get("load_duration"),
-                "prompt_eval_duration": generation_data.get("prompt_eval_duration"),
-                "eval_duration": generation_data.get("eval_duration"),
-                "temperature": generation_data.get("temperature")
+                "system_prompt": meta.get("system_prompt"),
+                "prompt": (meta.get("prompt") or "").replace("\n", " "),
+                "gen_text": content.replace("\n", " "),
+                "prompt_eval_count": usage.get("prompt_tokens"),
+                "eval_count": usage.get("completion_tokens"),
+                "load_duration": meta.get("load_duration"),
+                "prompt_eval_duration": meta.get("prompt_eval_duration"),
+                "eval_duration": meta.get("eval_duration") or meta.get("duration"),
+                "temperature": meta.get("temperature")
             }
 
             # Generate dynamic SQL query
@@ -160,8 +163,9 @@ class ModelOperatorOllama():
         """
         Sends a request to the LLM API and returns the response.
         """
-        timestamp = datetime.datetime.now().isoformat()
-        timestamp = str(timestamp)
+        now = datetime.datetime.now()
+        timestamp = now.isoformat()
+        created = int(now.timestamp())
         if model in self.model_list:
             self.model = model
         else:
@@ -207,68 +211,53 @@ class ModelOperatorOllama():
         print(f"[INFO] Sending request to Ollama: {self.url}chat")
         print(f"[INFO] Model: {self.model} | Temperature: {temperature}")
         response = requests.post(f"{self.url}chat", data=json.dumps(payload), headers=headers)
-        
-        # get generation timestamp
         print(f"[INFO] Response status: {response.status_code}")
-        response_json = response.json()
-        response_json.update({'system_prompt':system_prompt})
-        response_json.update({'prompt':prompt})
-        response_json.update({'timestamp':timestamp})
-        
-        # Process timing metrics with detailed logging
-        print(f"[INFO] Processing response metrics for model: {self.model}")
-        try:
-            load_duration_ns = response_json.get('load_duration')
-            if load_duration_ns is not None:
-                response_json['load_duration'] = round(load_duration_ns/(10**9),2)
-                print(f"[INFO] Model load duration: {response_json['load_duration']}s")
-            else:
-                print("[INFO] load_duration not found in response - model already loaded in memory")
-                response_json['load_duration'] = 0.0
-        except KeyError as e:
-            print(f"[INFO] load_duration key missing from response - model already loaded: {e}")
-            response_json['load_duration'] = 0.0
-        except Exception as e:
-            print(f"[ERROR] Failed to process load_duration: {e}")
-            response_json['load_duration'] = 0.0
-        
-        # Process prompt evaluation duration
-        try:
-            prompt_eval_ns = response_json.get('prompt_eval_duration')
-            if prompt_eval_ns is not None:
-                response_json['prompt_eval_duration'] = round(prompt_eval_ns/(10**9),2)
-            else:
-                print("[INFO] prompt_eval_duration not found - using 0.0")
-                response_json['prompt_eval_duration'] = 0.0
-        except Exception as e:
-            print(f"[ERROR] Failed to process prompt_eval_duration: {e}")
-            response_json['prompt_eval_duration'] = 0.0
-        
-        # Process evaluation duration
-        try:
-            eval_ns = response_json.get('eval_duration')
-            if eval_ns is not None:
-                response_json['eval_duration'] = round(eval_ns/(10**9),2)
-            else:
-                print("[INFO] eval_duration not found - using 0.0")
-                response_json['eval_duration'] = 0.0
-        except Exception as e:
-            print(f"[ERROR] Failed to process eval_duration: {e}")
-            response_json['eval_duration'] = 0.0
-            
-        print(f"[INFO] Prompt evaluation: {response_json['prompt_eval_duration']}s")
-        print(f"[INFO] Response generation: {response_json['eval_duration']}s")
-        response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
-        response_json['src'] = src
-        response_json['temperature'] = temperature
-        
-        
-        if db_save ==True:
-            print('[INFO] Saving generation data to database...')
-            self.save_to_db(response_json,ip_address)
-        print('[INFO] Response generation complete')
+        raw = response.json()
 
-        return response_json
+        content = raw.get("message", {}).get("content", "")
+        prompt_tokens = raw.get("prompt_eval_count")
+        completion_tokens = raw.get("eval_count")
+        load_duration = round((raw.get("load_duration") or 0) / 1e9, 2)
+        prompt_eval_duration = round((raw.get("prompt_eval_duration") or 0) / 1e9, 2)
+        eval_duration = round((raw.get("eval_duration") or 0) / 1e9, 2)
+
+        print(f"[INFO] Load: {load_duration}s | Prompt eval: {prompt_eval_duration}s | Generation: {eval_duration}s")
+
+        result = {
+            "id": f"{model}_{timestamp}",
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": raw.get("done_reason", "stop"),
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": (prompt_tokens or 0) + (completion_tokens or 0),
+            },
+            "response_metadata": {
+                "provider": "ollama",
+                "src": src,
+                "timestamp": timestamp,
+                "system_prompt": system_prompt,
+                "prompt": prompt,
+                "temperature": temperature,
+                "load_duration": load_duration,
+                "prompt_eval_duration": prompt_eval_duration,
+                "eval_duration": eval_duration,
+            },
+        }
+
+        if db_save:
+            print("[INFO] Saving generation data to database...")
+            self.save_to_db(result, ip_address)
+        print("[INFO] Response generation complete")
+        return result
         
     def generate_openrouter(self,
                             model,
@@ -292,7 +281,9 @@ class ModelOperatorOllama():
         - src: arbitrary source tag
         - temperature: sampling temperature
         """
-        timestamp = datetime.datetime.now().isoformat()
+        now = datetime.datetime.now()
+        timestamp = now.isoformat()
+        created = int(now.timestamp())
 
         client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -313,31 +304,49 @@ class ModelOperatorOllama():
             kwargs["response_format"] = format
 
         print(f"[INFO] Sending request to OpenRouter | Model: {model} | Temperature: {temperature}")
+        _t0 = datetime.datetime.now()
         completion = client.chat.completions.create(**kwargs)
-        print(f"[INFO] OpenRouter response received")
+        duration_s = round((datetime.datetime.now() - _t0).total_seconds(), 3)
+        print(f"[INFO] OpenRouter response received in {duration_s}s")
 
         content = completion.choices[0].message.content
         usage = completion.usage
+        prompt_tokens = usage.prompt_tokens if usage else None
+        completion_tokens = usage.completion_tokens if usage else None
+        total_tokens = usage.total_tokens if usage else None
+        cost = (usage.model_extra or {}).get("cost") if usage else None
 
-        response_dict = {
-            "provider": "openrouter",
+        result = {
+            "id": f"{model}_{timestamp}",
+            "object": "chat.completion",
+            "created": created,
             "model": model,
-            "message": {"role": "assistant", "content": content},
-            "system_prompt": system_prompt,
-            "prompt": prompt,
-            "timestamp": timestamp,
-            "gen_id": f"{model}_{timestamp}",
-            "src": src,
-            "temperature": temperature,
-            "prompt_eval_count": usage.prompt_tokens if usage else None,
-            "eval_count": usage.completion_tokens if usage else None,
-            "load_duration": 0.0,
-            "prompt_eval_duration": 0.0,
-            "eval_duration": 0.0,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": completion.choices[0].finish_reason or "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            },
+            "response_metadata": {
+                "provider": "openrouter",
+                "src": src,
+                "timestamp": timestamp,
+                "system_prompt": system_prompt,
+                "prompt": prompt,
+                "temperature": temperature,
+                "duration": duration_s,
+                "cost": cost,
+            },
         }
 
         print("[INFO] OpenRouter generation complete")
-        return response_dict
+        return result
 
     def list_models(self):
         
