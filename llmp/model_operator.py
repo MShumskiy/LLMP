@@ -4,6 +4,7 @@ import datetime
 import psycopg2 as psql
 from dotenv import load_dotenv
 import os
+from openai import OpenAI
 
 # with db connection
 
@@ -269,6 +270,75 @@ class ModelOperatorOllama():
 
         return response_json
         
+    def generate_openrouter(self,
+                            model,
+                            system_prompt,
+                            prompt,
+                            format=None,
+                            ip_address=None,
+                            src=None,
+                            temperature=0.5):
+        """
+        Sends a request to OpenRouter and returns a response dict
+        with the same shape as generate_response().
+        
+        Parameters:
+        - model: OpenRouter model string, e.g. 'qwen/qwen3-235b-a22b-2507'
+        - system_prompt: system message content
+        - prompt: user message content
+        - format: optional dict; when provided, requests JSON output
+                  (pass {"type": "json_object"} or a full json_schema dict)
+        - ip_address: caller IP for logging
+        - src: arbitrary source tag
+        - temperature: sampling temperature
+        """
+        timestamp = datetime.datetime.now().isoformat()
+
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("ORT_API_KEY"),
+        )
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=model,
+            temperature=temperature,
+            messages=messages,
+        )
+        if format:
+            kwargs["response_format"] = format
+
+        print(f"[INFO] Sending request to OpenRouter | Model: {model} | Temperature: {temperature}")
+        completion = client.chat.completions.create(**kwargs)
+        print(f"[INFO] OpenRouter response received")
+
+        content = completion.choices[0].message.content
+        usage = completion.usage
+
+        response_dict = {
+            "provider": "openrouter",
+            "model": model,
+            "message": {"role": "assistant", "content": content},
+            "system_prompt": system_prompt,
+            "prompt": prompt,
+            "timestamp": timestamp,
+            "gen_id": f"{model}_{timestamp}",
+            "src": src,
+            "temperature": temperature,
+            "prompt_eval_count": usage.prompt_tokens if usage else None,
+            "eval_count": usage.completion_tokens if usage else None,
+            "load_duration": 0.0,
+            "prompt_eval_duration": 0.0,
+            "eval_duration": 0.0,
+        }
+
+        print("[INFO] OpenRouter generation complete")
+        return response_dict
+
     def list_models(self):
         
         response = requests.get(f'{self.url}tags')

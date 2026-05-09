@@ -18,11 +18,12 @@ class GenerateRequest(BaseModel):
     tools: Optional[List[Dict]] = None
     src: str = None
     temperature: float = 0.5
+    provider: str = "ollama"   # "ollama" | "openrouter"
 
-def llmp_call(prompt, system_prompt, model,temperature=0.5,src=None,format=None):
+def llmp_call(prompt, system_prompt, model, temperature=0.5, src=None, format=None, provider="ollama"):
         """ 
-        Call the LLMP API to generate a response
-        All related to the call is processed here
+        Call the LLMP API to generate a response.
+        provider: "ollama" (default) or "openrouter"
         """
         
         headers = {
@@ -38,7 +39,8 @@ def llmp_call(prompt, system_prompt, model,temperature=0.5,src=None,format=None)
         tools=None,
         src=src,
         temperature=temperature,
-        format = format)
+        format=format,
+        provider=provider)
 
         payload = request_data.model_dump(exclude_none=True)
 
