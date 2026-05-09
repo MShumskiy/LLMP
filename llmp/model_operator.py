@@ -4,6 +4,7 @@ import datetime
 import psycopg2 as psql
 from dotenv import load_dotenv
 import os
+from openai import OpenAI
 
 # with db connection
 
@@ -105,22 +106,25 @@ class ModelOperatorOllama():
         - generation_data (dict): JSON object containing generation details.
         """
         try:
+            meta = generation_data.get("response_metadata", {})
+            usage = generation_data.get("usage", {})
+            content = (generation_data.get("choices") or [{}])[0].get("message", {}).get("content", "")
             # Map JSON keys to table columns
             db_columns = {
-                "src":generation_data.get("src"),
-                "gen_id": generation_data.get("gen_id"),
+                "src": meta.get("src"),
+                "gen_id": generation_data.get("id"),
                 "caller_address": ip_address,
-                "gen_timestamp": generation_data.get("timestamp"),
+                "gen_timestamp": meta.get("timestamp"),
                 "model": generation_data.get("model"),
-                "system_prompt": generation_data.get("system_prompt"),
-                "prompt": generation_data.get("prompt").replace("\n", " "),
-                "gen_text": generation_data.get("message", {}).get("content").replace("\n", " "),
-                "prompt_eval_count": generation_data.get("prompt_eval_count"),
-                "eval_count": generation_data.get("eval_count"),
-                "load_duration": generation_data.get("load_duration"),
-                "prompt_eval_duration": generation_data.get("prompt_eval_duration"),
-                "eval_duration": generation_data.get("eval_duration"),
-                "temperature": generation_data.get("temperature")
+                "system_prompt": meta.get("system_prompt"),
+                "prompt": (meta.get("prompt") or "").replace("\n", " "),
+                "gen_text": content.replace("\n", " "),
+                "prompt_eval_count": usage.get("prompt_tokens"),
+                "eval_count": usage.get("completion_tokens"),
+                "load_duration": meta.get("load_duration"),
+                "prompt_eval_duration": meta.get("prompt_eval_duration"),
+                "eval_duration": meta.get("eval_duration") or meta.get("duration"),
+                "temperature": meta.get("temperature")
             }
 
             # Generate dynamic SQL query
@@ -143,12 +147,25 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None, src = None, temperature = 0.5, max_gen_lenght = -1):
+    def generate_response(self,
+                          model,
+                          system_prompt,
+                          prompt,
+                          format=None,
+                          image=None,
+                          tools=None,
+                          ip_address=None,
+                          src = None,
+                          temperature = 0.5,
+                          max_gen_lenght = -1,
+                          db_save = False
+                          ):
         """
         Sends a request to the LLM API and returns the response.
         """
-        timestamp = datetime.datetime.now().isoformat()
-        timestamp = str(timestamp)
+        now = datetime.datetime.now()
+        timestamp = now.isoformat()
+        created = int(now.timestamp())
         if model in self.model_list:
             self.model = model
         else:
@@ -175,15 +192,13 @@ class ModelOperatorOllama():
         
         if image:
             import base64
-            
-            encoded_image = []
             filepath = rf"{image}"
             with open(filepath, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-                encoded_image.append(encoded_string)
-            
-            payload["messages"][1]["images"] = encoded_image
-            payload["model"] = 'llava:latest'
+
+            # attach image to the *user* message
+            payload["messages"][-1]["images"] = [encoded_string]
+            #payload["model"] = 'llava:latest'
                 
             #payload.update({'images':encoded_image})
         
@@ -193,26 +208,146 @@ class ModelOperatorOllama():
 
         headers = {"Content-Type": "application/json"}
         
+        print(f"[INFO] Sending request to Ollama: {self.url}chat")
+        print(f"[INFO] Model: {self.model} | Temperature: {temperature}")
         response = requests.post(f"{self.url}chat", data=json.dumps(payload), headers=headers)
-        
-        # get generation timestamp
-        
-        response_json = response.json()
-        response_json.update({'system_prompt':system_prompt})
-        response_json.update({'prompt':prompt})
-        response_json.update({'timestamp':timestamp})
-        response_json['load_duration'] = round(response_json['load_duration']/(10**9),2)
-        response_json['prompt_eval_duration'] = round(response_json['prompt_eval_duration']/(10**9),2)
-        response_json['eval_duration'] = round(response_json['eval_duration']/(10**9),2)
-        response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
-        response_json['src'] = src
-        response_json['temperature'] = temperature
-        
-        print('saving data')
-        self.save_to_db(response_json,ip_address)
+        print(f"[INFO] Response status: {response.status_code}")
+        raw = response.json()
 
-        return response_json
+        content = raw.get("message", {}).get("content", "")
+        prompt_tokens = raw.get("prompt_eval_count")
+        completion_tokens = raw.get("eval_count")
+        load_duration = round((raw.get("load_duration") or 0) / 1e9, 2)
+        prompt_eval_duration = round((raw.get("prompt_eval_duration") or 0) / 1e9, 2)
+        eval_duration = round((raw.get("eval_duration") or 0) / 1e9, 2)
+
+        print(f"[INFO] Load: {load_duration}s | Prompt eval: {prompt_eval_duration}s | Generation: {eval_duration}s")
+
+        result = {
+            "id": f"{model}_{timestamp}",
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": raw.get("done_reason", "stop"),
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": (prompt_tokens or 0) + (completion_tokens or 0),
+            },
+            "response_metadata": {
+                "provider": "ollama",
+                "src": src,
+                "timestamp": timestamp,
+                "system_prompt": system_prompt,
+                "prompt": prompt,
+                "temperature": temperature,
+                "load_duration": load_duration,
+                "prompt_eval_duration": prompt_eval_duration,
+                "eval_duration": eval_duration,
+            },
+        }
+
+        if db_save:
+            print("[INFO] Saving generation data to database...")
+            self.save_to_db(result, ip_address)
+        print("[INFO] Response generation complete")
+        return result
         
+    def generate_openrouter(self,
+                            model,
+                            system_prompt,
+                            prompt,
+                            format=None,
+                            ip_address=None,
+                            src=None,
+                            temperature=0.5):
+        """
+        Sends a request to OpenRouter and returns a response dict
+        with the same shape as generate_response().
+        
+        Parameters:
+        - model: OpenRouter model string, e.g. 'qwen/qwen3-235b-a22b-2507'
+        - system_prompt: system message content
+        - prompt: user message content
+        - format: optional dict; when provided, requests JSON output
+                  (pass {"type": "json_object"} or a full json_schema dict)
+        - ip_address: caller IP for logging
+        - src: arbitrary source tag
+        - temperature: sampling temperature
+        """
+        now = datetime.datetime.now()
+        timestamp = now.isoformat()
+        created = int(now.timestamp())
+
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("ORT_API_KEY"),
+        )
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs = dict(
+            model=model,
+            temperature=temperature,
+            messages=messages,
+        )
+        if format:
+            kwargs["response_format"] = format
+
+        print(f"[INFO] Sending request to OpenRouter | Model: {model} | Temperature: {temperature}")
+        _t0 = datetime.datetime.now()
+        completion = client.chat.completions.create(**kwargs)
+        duration_s = round((datetime.datetime.now() - _t0).total_seconds(), 3)
+        print(f"[INFO] OpenRouter response received in {duration_s}s")
+
+        content = completion.choices[0].message.content
+        usage = completion.usage
+        prompt_tokens = usage.prompt_tokens if usage else None
+        completion_tokens = usage.completion_tokens if usage else None
+        total_tokens = usage.total_tokens if usage else None
+        cost = (usage.model_extra or {}).get("cost") if usage else None
+
+        result = {
+            "id": f"{model}_{timestamp}",
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": completion.choices[0].finish_reason or "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            },
+            "response_metadata": {
+                "provider": "openrouter",
+                "src": src,
+                "timestamp": timestamp,
+                "system_prompt": system_prompt,
+                "prompt": prompt,
+                "temperature": temperature,
+                "duration": duration_s,
+                "cost": cost,
+            },
+        }
+
+        print("[INFO] OpenRouter generation complete")
+        return result
+
     def list_models(self):
         
         response = requests.get(f'{self.url}tags')

@@ -41,6 +41,7 @@ class GenerateRequest(BaseModel):
     src: str = None
     temperature: float = 0.5
     max_gen_lenght: int = -1
+    provider: str = "ollama"   # "ollama" | "openrouter"
     
 
 @app.get("/models", dependencies=[Depends(authenticate)])
@@ -54,22 +55,33 @@ def list_models():
 def generate_response(request: Request, body: GenerateRequest):
     """
     Endpoint to generate a response.
+    provider: "ollama" (default) or "openrouter"
     """
-    
     ip_address = request.client.host
     try:
-        response = model_operator.generate_response(
-            model=body.model,
-            system_prompt=body.system_prompt,
-            prompt=body.prompt,
-            format=body.format,
-            image=body.image,
-            tools=body.tools,
-            ip_address=ip_address,
-            src=body.src,
-            temperature = body.temperature,
-            max_gen_lenght=body.max_gen_lenght
-        )
+        if body.provider == "openrouter":
+            response = model_operator.generate_openrouter(
+                model=body.model,
+                system_prompt=body.system_prompt,
+                prompt=body.prompt,
+                format=body.format,
+                ip_address=ip_address,
+                src=body.src,
+                temperature=body.temperature,
+            )
+        else:
+            response = model_operator.generate_response(
+                model=body.model,
+                system_prompt=body.system_prompt,
+                prompt=body.prompt,
+                format=body.format,
+                image=body.image,
+                tools=body.tools,
+                ip_address=ip_address,
+                src=body.src,
+                temperature=body.temperature,
+                max_gen_lenght=body.max_gen_lenght,
+            )
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {e}")
