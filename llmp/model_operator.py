@@ -175,15 +175,13 @@ class ModelOperatorOllama():
         
         if image:
             import base64
-            
-            encoded_image = []
             filepath = rf"{image}"
             with open(filepath, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-                encoded_image.append(encoded_string)
-            
-            payload["messages"][1]["images"] = encoded_image
-            payload["model"] = 'llava:latest'
+
+            # attach image to the *user* message
+            payload["messages"][-1]["images"] = [encoded_string]
+            #payload["model"] = 'llava:latest'
                 
             #payload.update({'images':encoded_image})
         
@@ -193,23 +191,67 @@ class ModelOperatorOllama():
 
         headers = {"Content-Type": "application/json"}
         
+        print(f"[INFO] Sending request to Ollama: {self.url}chat")
+        print(f"[INFO] Model: {self.model} | Temperature: {temperature}")
         response = requests.post(f"{self.url}chat", data=json.dumps(payload), headers=headers)
         
         # get generation timestamp
-        
+        print(f"[INFO] Response status: {response.status_code}")
         response_json = response.json()
         response_json.update({'system_prompt':system_prompt})
         response_json.update({'prompt':prompt})
         response_json.update({'timestamp':timestamp})
-        response_json['load_duration'] = round(response_json['load_duration']/(10**9),2)
-        response_json['prompt_eval_duration'] = round(response_json['prompt_eval_duration']/(10**9),2)
-        response_json['eval_duration'] = round(response_json['eval_duration']/(10**9),2)
+        
+        # Process timing metrics with detailed logging
+        print(f"[INFO] Processing response metrics for model: {self.model}")
+        try:
+            load_duration_ns = response_json.get('load_duration')
+            if load_duration_ns is not None:
+                response_json['load_duration'] = round(load_duration_ns/(10**9),2)
+                print(f"[INFO] Model load duration: {response_json['load_duration']}s")
+            else:
+                print("[INFO] load_duration not found in response - model already loaded in memory")
+                response_json['load_duration'] = 0.0
+        except KeyError as e:
+            print(f"[INFO] load_duration key missing from response - model already loaded: {e}")
+            response_json['load_duration'] = 0.0
+        except Exception as e:
+            print(f"[ERROR] Failed to process load_duration: {e}")
+            response_json['load_duration'] = 0.0
+        
+        # Process prompt evaluation duration
+        try:
+            prompt_eval_ns = response_json.get('prompt_eval_duration')
+            if prompt_eval_ns is not None:
+                response_json['prompt_eval_duration'] = round(prompt_eval_ns/(10**9),2)
+            else:
+                print("[INFO] prompt_eval_duration not found - using 0.0")
+                response_json['prompt_eval_duration'] = 0.0
+        except Exception as e:
+            print(f"[ERROR] Failed to process prompt_eval_duration: {e}")
+            response_json['prompt_eval_duration'] = 0.0
+        
+        # Process evaluation duration
+        try:
+            eval_ns = response_json.get('eval_duration')
+            if eval_ns is not None:
+                response_json['eval_duration'] = round(eval_ns/(10**9),2)
+            else:
+                print("[INFO] eval_duration not found - using 0.0")
+                response_json['eval_duration'] = 0.0
+        except Exception as e:
+            print(f"[ERROR] Failed to process eval_duration: {e}")
+            response_json['eval_duration'] = 0.0
+            
+        print(f"[INFO] Prompt evaluation: {response_json['prompt_eval_duration']}s")
+        print(f"[INFO] Response generation: {response_json['eval_duration']}s")
         response_json['gen_id'] = f'{response_json['model']}_{response_json['timestamp']}'
         response_json['src'] = src
         response_json['temperature'] = temperature
         
-        print('saving data')
+        print('[INFO] Saving generation data to database...')
         self.save_to_db(response_json,ip_address)
+        print('[INFO] Response generation complete')
 
         return response_json
         

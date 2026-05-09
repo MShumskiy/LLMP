@@ -38,3 +38,7 @@ poetry run uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     Click Allow the connection → Next.
     Select Private Network (to allow only LAN connections).
     Name it FastAPI Access → Finish.
+
+poetry run pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+   
+poetry run pip uninstall torch torchvision torchaudio -y     
