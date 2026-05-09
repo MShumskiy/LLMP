@@ -143,7 +143,19 @@ class ModelOperatorOllama():
             print(f"Failed to save generation to database: {e}")
         
 
-    def generate_response(self,model,system_prompt,prompt,format=None,image=None,tools=None, ip_address=None, src = None, temperature = 0.5, max_gen_lenght = -1):
+    def generate_response(self,
+                          model,
+                          system_prompt,
+                          prompt,
+                          format=None,
+                          image=None,
+                          tools=None,
+                          ip_address=None,
+                          src = None,
+                          temperature = 0.5,
+                          max_gen_lenght = -1,
+                          db_save = False
+                          ):
         """
         Sends a request to the LLM API and returns the response.
         """
@@ -249,8 +261,10 @@ class ModelOperatorOllama():
         response_json['src'] = src
         response_json['temperature'] = temperature
         
-        print('[INFO] Saving generation data to database...')
-        self.save_to_db(response_json,ip_address)
+        
+        if db_save ==True:
+            print('[INFO] Saving generation data to database...')
+            self.save_to_db(response_json,ip_address)
         print('[INFO] Response generation complete')
 
         return response_json
