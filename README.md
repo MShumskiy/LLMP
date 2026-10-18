@@ -5,8 +5,9 @@ A FastAPI-based platform for serving local Large Language Models (LLMs) with aut
 ## 🌟 Features
 
 - **FastAPI-based API**: High-performance REST API for LLM interactions
+- **OpenAI-compatible `/v1` API**: multi-turn messages, tool calls, streaming and images through the stock `openai` SDK, on both Ollama and OpenRouter models
 - **Ollama Integration**: Seamless integration with Ollama for running local LLMs
-- **Authentication & Authorization**: API key and IP-based access control
+- **Authentication & Authorization**: named API keys (bare or `Bearer`) and an IP/CIDR allowlist
 - **Database Logging**: PostgreSQL database for storing generation history and analytics
 - **Multi-modal Support**: Text and image processing capabilities
 - **Tool Support**: Function calling and structured output generation
@@ -44,7 +45,13 @@ A FastAPI-based platform for serving local Large Language Models (LLMs) with aut
 
    # Authentication
    authentication_key=your_secret_key_here
+   # Optional named keys, one per caller; the name is logged with every /v1 call
+   LLMP_KEY_VEGA=another_secret_key
+   # Addresses and CIDR ranges; "*" allows any address, unset allows loopback only
    ALLOWED_IPS=127.0.0.1,192.168.1.0/24
+
+   # OpenRouter
+   ORT_API_KEY=your_openrouter_key
 
    # Database Configuration
    db_user=your_db_user
@@ -80,7 +87,7 @@ A FastAPI-based platform for serving local Large Language Models (LLMs) with aut
    ollama serve
    
    # Terminal 2: Start LLMP
-   poetry run uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+   poetry run uvicorn llmp.main:app --host 0.0.0.0 --port 8000 --reload
    ```
 
    **Option 3: Using poetry script**
@@ -131,9 +138,45 @@ start_llmp.bat
 ## 🔧 API Endpoints
 
 ### Authentication
-All endpoints require authentication via the `Authorization` header with your API key.
+All endpoints require the `Authorization` header with an API key, either bare (`Authorization: <key>`) or as `Authorization: Bearer <key>`, which is what the OpenAI SDK sends. Valid keys are `authentication_key` (logged as `default`) and every `LLMP_KEY_<NAME>` in `.env` (logged as `<name>`). A missing key gets 401, a wrong key 403. The caller's IP must also match `ALLOWED_IPS`.
 
-### Available Endpoints
+### OpenAI-compatible API (`/v1`)
+
+Point any OpenAI client at `http://<llmp-host>:8000/v1`. Model ids are `<provider>/<model>`: `ollama/gpt-oss:20b`, `openrouter/qwen/qwen3-235b-a22b-2507`.
+
+```python
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key="<key>")
+r = await client.chat.completions.create(
+    model="ollama/gpt-oss:20b",
+    messages=[{"role": "user", "content": "Hi"}],
+    tools=[...],                       # standard tool definitions
+    stream=True,                       # server-sent events; the last chunk carries usage
+    extra_body={"llmp": {"src": "vega", "session_id": "abc", "num_ctx": 32768, "keep_alive": "30m"}},
+)
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | Chat Completions: `messages` (system, user, assistant with `tool_calls`, tool), `tools`, `tool_choice`, `stream`, `temperature`, `top_p`, `max_tokens`, `stop`, `seed`, `response_format`, `reasoning`. Images go in as `image_url` parts with a `data:` URL. |
+| `GET /v1/models` | Models from both providers with `context_window`, `max_output`, `capabilities` (`tools`, `vision`, `reasoning`, `json_schema`) and `pricing` (USD per million tokens). Cached for 10 minutes; `?refresh=1` forces a refresh. OpenRouter models are filtered by the allowlist in `llmp.toml`. |
+| `GET /v1/models/{id}` | One model from the catalog. |
+| `GET /v1/health` | `{status, providers: {ollama, openrouter}, db}`, each `ok` or `down`. |
+
+The optional `llmp` body field takes `src`, `session_id`, `run_id`, `agent`, `tags` (stored in `chat_log`), `keep_alive`, `num_ctx` and `options` (Ollama only), and `log` (`full`, `last_message` or `meta`, see below).
+
+Responses are standard Chat Completions plus an `llmp` object: `{provider, gen_id, log_id, latency_ms, ttft_ms}`, and for Ollama also `load_ms`, `num_ctx` and `keep_alive`. OpenRouter responses include `usage.cost`.
+
+How the providers are handled:
+
+- **OpenRouter** requests are passed through with the prefix stripped and `usage.include` set, so the cost comes back. `reasoning` and `cache_control` parts pass through unchanged.
+- **Ollama** requests go to the native `/api/chat`. Data-URL images become `images`, tool-call arguments come back as JSON strings with ids `call_<n>`, `reasoning` becomes `think`, and the model's thinking comes back as `reasoning`. Calls use `keep_alive` 30m and `num_ctx` 32768 by default (both set in `llmp.toml`), so the model stays loaded between agent steps.
+- At most 2 Ollama and 16 OpenRouter calls run at once (also set in `llmp.toml`); further calls queue.
+
+`scripts/smoke_v1.py` checks a deployment end to end with the OpenAI SDK: a two-step tool round trip (streaming and not) per model, or an image description with `--image`.
+
+### Legacy endpoints
 
 #### `GET /models`
 List all available Ollama models with their details.
@@ -170,20 +213,36 @@ Generate responses from LLM models.
 **Response:**
 ```json
 {
+  "id": "llama3.2:latest_2025-10-27T12:00:00",
+  "object": "chat.completion",
+  "created": 1761566400,
   "model": "llama3.2:latest",
-  "message": {
-    "content": "Why don't scientists trust atoms? Because they make up everything!"
-  },
-  "prompt_eval_count": 15,
-  "eval_count": 20,
-  "load_duration": 0.5,
-  "prompt_eval_duration": 0.3,
-  "eval_duration": 1.2,
-  "gen_id": "llama3.2:latest_2025-10-27T12:00:00",
-  "src": "example_app",
-  "temperature": 0.7
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Why don't scientists trust atoms? Because they make up everything!"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": { "prompt_tokens": 15, "completion_tokens": 20, "total_tokens": 35 },
+  "response_metadata": {
+    "provider": "ollama",
+    "src": "example_app",
+    "timestamp": "2025-10-27T12:00:00",
+    "system_prompt": "You are a helpful AI assistant.",
+    "prompt": "Tell me a joke",
+    "temperature": 0.7,
+    "load_duration": 0.5,
+    "prompt_eval_duration": 0.3,
+    "eval_duration": 1.2
+  }
 }
 ```
+
+Set `"provider": "openrouter"` to send the prompt to an OpenRouter model instead; `response_metadata` then has `duration` and `cost`.
 
 ## 🛠️ Usage Examples
 
@@ -201,7 +260,7 @@ response = llmp_call(
     src="education_app"
 )
 
-print(response['message']['content'])
+print(response['choices'][0]['message']['content'])
 ```
 
 ### Using cURL
@@ -301,7 +360,17 @@ The platform includes built-in analytics capabilities:
 
 ### Database Schema
 
-The platform automatically creates a `generation_history_v4` table with the following structure:
+Every `/v1` chat call writes a row to `chat_log`, created on first use. Rows are written by a background thread through a connection pool, so logging never slows a call down. Columns: `id`, `ts`, `key_name`, `src`, `session_id`, `run_id`, `agent`, `tags`, `client_ip`, `provider`, `model`, `stream`, `log_mode`, `gen_id`, `request`, `response`, `prompt_tokens`, `completion_tokens`, `cached_tokens`, `reasoning_tokens`, `cost`, `latency_ms`, `ttft_ms`, `status` (`ok`, `error` or `cancelled`), `http_status`, `error`.
+
+How much of the request is stored depends on `llmp.log` (default from `llmp.toml`):
+
+- `full`: the whole request.
+- `last_message`: only the messages added since the previous call with the same `session_id`, plus the length and a hash of the earlier messages. Agent loops resend the whole history on every step, so this keeps storage linear. Without a `session_id`, only the last message is stored.
+- `meta`: parameters and metrics only.
+
+Image data is replaced by its hash and size in every mode.
+
+The legacy `/generate` path uses a `generation_history_v4` table with the following structure:
 
 - `id`: Unique UUID for each generation
 - `src`: Source application identifier
@@ -331,11 +400,18 @@ The platform automatically creates a `generation_history_v4` table with the foll
 ```
 LLMP/
 ├── llmp/                    # Main package
-│   ├── main.py             # FastAPI application and routes
-│   ├── model_operator.py   # Ollama integration and database operations
+│   ├── main.py             # FastAPI application, legacy routes
+│   ├── v1.py               # OpenAI-compatible /v1 routes
+│   ├── auth.py             # API keys and IP allowlist
+│   ├── config.py           # Settings from .env and llmp.toml
+│   ├── chat_log.py         # chat_log table and background writer
+│   ├── providers/          # Ollama and OpenRouter adapters
+│   ├── model_operator.py   # Legacy /generate implementation
 │   └── utils/
 │       └── llmp_utils.py   # Client utilities for API calls
-├── app.py                  # Application entry point
+├── llmp.toml               # Non-secret settings: defaults, limits, OpenRouter allowlist
+├── scripts/smoke_v1.py     # End-to-end check with the OpenAI SDK
+├── tests/                  # Offline tests (poetry run pytest)
 ├── start_llmp.bat          # Windows batch startup script
 ├── start_llmp.ps1          # PowerShell startup script (recommended)
 ├── analysis.ipynb         # Analytics and monitoring notebook
