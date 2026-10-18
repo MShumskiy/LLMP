@@ -6,7 +6,7 @@ authors = ["Mykola Shumskiy <mykola_shumskiy@outlook.pt>"]
 packages = [{ include = "llmp" }]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 pandas = "^2.2.3"
 numpy = "^2.2.2"
 requests = "^2.32.3"
@@ -17,9 +17,20 @@ fastapi = "^0.115.8"
 pydantic = "^2.10.6"
 uvicorn = "^0.34.0"
 gradio = "^6.3.0"
+openai = "^1.109.1"
+httpx = "^0.28.1"
+psycopg = { version = "^3.2", extras = ["binary"] }
+psycopg-pool = "^3.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4"
 
 [tool.poetry.scripts]
 llmp-api = "llmp.main:run"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
