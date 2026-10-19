@@ -50,7 +50,7 @@ async def _validation_error(request: Request, exc: RequestValidationError):
     return await request_validation_exception_handler(request, exc)
 
 
-# ── Legacy API (/generate, /models), used by ORION ─────────────────────────────
+# ── Legacy API (/generate, /models) ────────────────────────────────────────────
 
 _model_operator = None
 _model_operator_lock = threading.Lock()

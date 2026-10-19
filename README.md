@@ -46,7 +46,7 @@ A FastAPI-based platform for serving local Large Language Models (LLMs) with aut
    # Authentication
    authentication_key=your_secret_key_here
    # Optional named keys, one per caller; the name is logged with every /v1 call
-   LLMP_KEY_VEGA=another_secret_key
+   LLMP_KEY_MYAPP=another_secret_key
    # Addresses and CIDR ranges; "*" allows any address, unset allows loopback only
    ALLOWED_IPS=127.0.0.1,192.168.1.0/24
 
@@ -153,7 +153,7 @@ r = await client.chat.completions.create(
     messages=[{"role": "user", "content": "Hi"}],
     tools=[...],                       # standard tool definitions
     stream=True,                       # server-sent events; the last chunk carries usage
-    extra_body={"llmp": {"src": "vega", "session_id": "abc", "num_ctx": 32768, "keep_alive": "30m"}},
+    extra_body={"llmp": {"src": "myapp", "session_id": "abc", "num_ctx": 32768, "keep_alive": "30m"}},
 )
 ```
 
@@ -195,13 +195,13 @@ Aggregates `chat_log` for budgets and usage pages. Every parameter is optional:
 | `limit` | Most groups to return (default 1000, at most 10000). `truncated` says whether more existed. |
 
 ```
-GET /v1/usage?src=vega&since=2026-10-01&tz=Europe/Lisbon&group_by=model,day
+GET /v1/usage?src=myapp&since=2026-10-01&tz=Europe/Lisbon&group_by=model,day
 ```
 
 ```json
 {
   "object": "usage", "since": "2026-10-01T00:00:00+01:00", "until": null, "tz": "Europe/Lisbon",
-  "filters": {"src": ["vega"]}, "group_by": ["model", "day"],
+  "filters": {"src": ["myapp"]}, "group_by": ["model", "day"],
   "totals": {"calls": 42, "errors": 1, "cancelled": 0, "prompt_tokens": 512000, "completion_tokens": 9100,
              "total_tokens": 521100, "cached_tokens": 401000, "reasoning_tokens": 2300, "cost": 0.4123},
   "data": [{"model": "openrouter/qwen/qwen3-235b-a22b-2507", "day": "2026-10-18", "calls": 30, "...": "..."}],

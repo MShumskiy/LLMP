@@ -442,7 +442,7 @@ class UsageQuery(BaseModel):
 
 @router.get("/usage")
 async def usage(request: Request, q: Annotated[UsageQuery, Query()]):
-    """Calls, tokens, cost and errors from chat_log, optionally grouped, e.g. ?src=vega&since=…&group_by=model,day"""
+    """Calls, tokens, cost and errors from chat_log, optionally grouped, e.g. ?src=myapp&since=…&group_by=model,day"""
     rt = _rt(request)
 
     def split(values: list[str]) -> list[str]:

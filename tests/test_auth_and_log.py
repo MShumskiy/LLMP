@@ -3,13 +3,13 @@ from llmp.chat_log import SessionPrefixes, elide_images, request_record
 
 
 def test_keys_bearer_and_bare():
-    keys = load_keys({"authentication_key": "k-default", "LLMP_KEY_VEGA": "k-vega", "LLMP_KEY_ORION": ""})
-    assert keys == {"k-default": "default", "k-vega": "vega"}
+    keys = load_keys({"authentication_key": "k-default", "LLMP_KEY_APP": "k-app", "LLMP_KEY_OTHER": ""})
+    assert keys == {"k-default": "default", "k-app": "app"}
     assert key_name("k-default", keys) == "default"
-    assert key_name("Bearer k-vega", keys) == "vega"
-    assert key_name("bearer   k-vega ", keys) == "vega"
+    assert key_name("Bearer k-app", keys) == "app"
+    assert key_name("bearer   k-app ", keys) == "app"
     assert key_name("Bearer wrong", keys) is None
-    assert key_name("k-vega-extra", keys) is None
+    assert key_name("k-app-extra", keys) is None
 
 
 def test_allowed_ips_cidr():

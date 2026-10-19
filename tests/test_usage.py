@@ -16,14 +16,14 @@ def metrics(**kw) -> dict:
 
 def test_usage_sql_binds_values_and_groups_by_position():
     since = datetime(2026, 10, 1, tzinfo=timezone.utc)
-    statements, params = usage_sql(["model", "day"], {"src": ["vega"], "run_id": ["r1", "r2"]},
+    statements, params = usage_sql(["model", "day"], {"src": ["myapp"], "run_id": ["r1", "r2"]},
                                    since, None, "Europe/Lisbon", 50)
     totals, grouped = statements
     assert "GROUP BY" not in totals and "LIMIT" not in totals
     assert "src = ANY(%(src)s) AND run_id = ANY(%(run_id)s) AND ts >= %(since)s" in totals
     assert grouped.startswith("SELECT model AS model, (ts AT TIME ZONE %(tz)s)::date AS day, count(*) AS calls")
     assert "GROUP BY 1, 2 ORDER BY 1, 2 LIMIT %(limit)s" in grouped
-    assert params == {"src": ["vega"], "run_id": ["r1", "r2"], "since": since, "tz": "Europe/Lisbon", "limit": 51}
+    assert params == {"src": ["myapp"], "run_id": ["r1", "r2"], "since": since, "tz": "Europe/Lisbon", "limit": 51}
 
     statements, params = usage_sql([], {}, None, None, "UTC", 50)
     assert len(statements) == 1 and statements[0].endswith("FROM chat_log") and params == {}
@@ -59,17 +59,17 @@ def test_usage_route(api):
     log.results = [[metrics(calls=2, prompt_tokens=30, completion_tokens=3, cost=Decimal("0.5"))],
                    [{"model": "ollama/a", "day": date(2026, 10, 2), **metrics(calls=2, prompt_tokens=30, completion_tokens=3)}]]
     r = client.get("/v1/usage", params=[
-        ("src", "vega"), ("model", "ollama/a,ollama/b"), ("model", "ollama/c"), ("group_by", "model,day"),
+        ("src", "myapp"), ("model", "ollama/a,ollama/b"), ("model", "ollama/c"), ("group_by", "model,day"),
         ("since", "2026-10-01"), ("until", "2026-10-31T00:00:00Z"), ("tz", "Europe/Lisbon"),
     ])
     assert r.status_code == 200
     body = r.json()
     (statements, params), = log.queries
-    assert params["src"] == ["vega"] and params["model"] == ["ollama/a", "ollama/b", "ollama/c"]
+    assert params["src"] == ["myapp"] and params["model"] == ["ollama/a", "ollama/b", "ollama/c"]
     assert params["since"] == datetime(2026, 10, 1, tzinfo=ZoneInfo("Europe/Lisbon"))  # no offset: read in tz
     assert params["until"] == datetime(2026, 10, 31, tzinfo=timezone.utc)
     assert body["since"] == "2026-10-01T00:00:00+01:00" and body["group_by"] == ["model", "day"]
-    assert body["filters"] == {"src": ["vega"], "model": ["ollama/a", "ollama/b", "ollama/c"]}
+    assert body["filters"] == {"src": ["myapp"], "model": ["ollama/a", "ollama/b", "ollama/c"]}
     assert body["totals"]["calls"] == 2 and body["totals"]["cost"] == 0.5 and body["totals"]["total_tokens"] == 33
     assert body["data"][0]["day"] == "2026-10-02" and body["truncated"] is False
 

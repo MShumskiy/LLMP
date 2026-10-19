@@ -3,9 +3,9 @@ API-key and IP authentication, shared by the legacy routes and /v1.
 
 Keys come from .env:
   authentication_key=...      the original key, logged under the name "default"
-  LLMP_KEY_<NAME>=...         one named key per caller, e.g. LLMP_KEY_VEGA, LLMP_KEY_ORION
+  LLMP_KEY_<NAME>=...         one named key per caller, e.g. LLMP_KEY_MYAPP
 
-The key may be sent bare (`Authorization: <key>`, as ORION does) or as
+The key may be sent bare (`Authorization: <key>`, as older clients do) or as
 `Authorization: Bearer <key>` (as the OpenAI SDK does).
 
 ALLOWED_IPS is a comma-separated list of addresses and CIDR ranges
