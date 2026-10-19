@@ -1,28 +1,37 @@
 """
-OpenAI-compatible API under /v1: chat completions (plain and SSE), the model
-catalog and health. Model ids are "<provider>/<model>", e.g. "ollama/gpt-oss:20b"
-or "openrouter/qwen/qwen3-235b-a22b-2507"; the prefix picks the provider adapter.
+OpenAI-compatible API under /v1: chat completions (plain and SSE), embeddings,
+the model catalog, health and usage totals. Model ids are "<provider>/<model>",
+e.g. "ollama/gpt-oss:20b" or "openrouter/qwen/qwen3-235b-a22b-2507"; the prefix
+picks the provider adapter.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import struct
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import anyio
 import httpx
-from fastapi import APIRouter, Depends, Request
+import psycopg
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from psycopg_pool import PoolTimeout
 from pydantic import BaseModel, ConfigDict, Field
 
 from llmp.auth import authenticate
-from llmp.chat_log import ChatLogWriter, SessionPrefixes, request_record
+from llmp.chat_log import (
+    USAGE_FILTERS, USAGE_GROUPS, ChatLogWriter, SessionPrefixes, embedding_request_record, request_record,
+    usage_result, usage_sql,
+)
 from llmp.config import Settings
 from llmp.providers import OllamaProvider, OpenRouterProvider, Provider, ProviderError
 
@@ -41,6 +50,7 @@ class LlmpOptions(BaseModel):
     keep_alive: str | int | None = None
     num_ctx: int | None = None
     options: dict | None = None  # raw Ollama options, e.g. {"top_k": 20}
+    truncate: bool | None = None  # embeddings: False makes Ollama reject inputs longer than num_ctx
     log: Literal["full", "last_message", "meta"] | None = None
 
 
@@ -51,6 +61,17 @@ class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[dict] = Field(min_length=1)
     stream: bool = False
+    llmp: LlmpOptions | None = None
+
+
+class EmbeddingRequest(BaseModel):
+    """Validated for errors and docs; the raw JSON body is what gets forwarded."""
+
+    model_config = ConfigDict(extra="allow")
+    model: str
+    input: str | list[str] | list[int] | list[list[int]]
+    encoding_format: Literal["float", "base64"] = "float"
+    dimensions: int | None = Field(None, gt=0)
     llmp: LlmpOptions | None = None
 
 
@@ -195,21 +216,25 @@ def _resolve(rt: Runtime, model_id: str) -> tuple[Provider, str]:
 
 
 class _Call:
-    """One /v1 chat call: its timing, metadata and chat_log row."""
+    """One /v1 chat or embeddings call: its timing, metadata and chat_log row."""
 
-    def __init__(self, rt: Runtime, request: Request, raw: dict, opts: dict):
+    def __init__(self, rt: Runtime, request: Request, raw: dict, opts: dict, endpoint: str = "chat/completions"):
         self.rt = rt
         self.id = uuid.uuid4()
         self.ts = datetime.now(timezone.utc)
         self.t0 = time.monotonic()
         self.opts = opts
+        self.endpoint = endpoint
         self.model = raw.get("model")
         self.provider = (self.model or "").partition("/")[0]
         self.stream = bool(raw.get("stream"))
         self.key_name = getattr(request.state, "key_name", None)
         self.client_ip = request.client.host if request.client else None
         self.log_mode = opts.get("log") or rt.settings.log_default_mode
-        self.request = request_record(raw, self.log_mode, opts.get("session_id"), rt.prefixes)
+        if endpoint == "embeddings":
+            self.request = embedding_request_record(raw, self.log_mode)
+        else:
+            self.request = request_record(raw, self.log_mode, opts.get("session_id"), rt.prefixes)
 
     def latency_ms(self) -> int:
         return round((time.monotonic() - self.t0) * 1000)
@@ -228,7 +253,8 @@ class _Call:
             "id": self.id, "ts": self.ts, "key_name": self.key_name,
             "src": self.opts.get("src"), "session_id": self.opts.get("session_id"),
             "run_id": self.opts.get("run_id"), "agent": self.opts.get("agent"), "tags": self.opts.get("tags"),
-            "client_ip": self.client_ip, "provider": self.provider, "model": self.model, "stream": self.stream,
+            "client_ip": self.client_ip, "endpoint": self.endpoint,
+            "provider": self.provider, "model": self.model, "stream": self.stream,
             "log_mode": self.log_mode, "gen_id": gen_id,
             "request": self.request, "response": None if self.log_mode == "meta" else response,
             "prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
@@ -295,6 +321,39 @@ class _Accumulator:
         return {"message": message, "finish_reason": self.finish_reason}
 
 
+# ── Embeddings ─────────────────────────────────────────────────────────────────
+
+
+@router.post("/embeddings")
+async def embeddings(request: Request, body: EmbeddingRequest):
+    rt = _rt(request)
+    raw = await request.json()
+    opts = body.llmp.model_dump(exclude_none=True) if body.llmp else {}
+    call = _Call(rt, request, raw, opts, endpoint="embeddings")
+    try:
+        provider, model = _resolve(rt, body.model)
+        resp = await provider.embed(model, raw, opts)
+    except ProviderError as e:
+        call.finish("error", e.status, error=e.message)
+        return _error_response(e)
+    except Exception as e:
+        log.exception("embeddings call failed")
+        call.finish("error", 500, error=f"{type(e).__name__}: {e}")
+        return _error_response(ProviderError(500, f"LLMP internal error: {type(e).__name__}: {e}", "server_error"))
+
+    data = resp["data"]
+    resp["llmp"] = call.llmp_fields(resp.pop("llmp", None) or {}, None, None)
+    call.finish("ok", 200, usage=resp.get("usage"), response={
+        "n": len(data), "dimensions": len(data[0]["embedding"]) if data else None,
+    })
+    if body.encoding_format == "base64":
+        # What the OpenAI SDK asks for by default: little-endian float32, base64-encoded.
+        for item in data:
+            vector = item["embedding"]
+            item["embedding"] = base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode("ascii")
+    return JSONResponse(resp)
+
+
 # ── Models and health ──────────────────────────────────────────────────────────
 
 
@@ -356,4 +415,65 @@ async def health(request: Request):
         "status": "ok" if ok else "degraded",
         "providers": {name: "ok" if up else "down" for name, up in zip(rt.providers, provider_ok)},
         "db": "ok" if db_ok else "down",
+    }
+
+
+# ── Usage ──────────────────────────────────────────────────────────────────────
+
+
+class UsageQuery(BaseModel):
+    """Query parameters of /v1/usage. List parameters take repeated or comma-separated values."""
+
+    model_config = ConfigDict(extra="forbid")
+    since: datetime | None = Field(None, description="Inclusive start; a time without an offset is read in `tz`")
+    until: datetime | None = Field(None, description="Exclusive end; a time without an offset is read in `tz`")
+    group_by: list[str] = Field([], description=f"Any of: {', '.join(USAGE_GROUPS)}")
+    tz: str = Field("UTC", description="IANA time zone for `day` and for times without an offset")
+    limit: int = Field(1000, ge=1, le=10_000, description="Most groups to return")
+    src: list[str] = []
+    key_name: list[str] = []
+    session_id: list[str] = []
+    run_id: list[str] = []
+    agent: list[str] = []
+    provider: list[str] = []
+    model: list[str] = []
+    endpoint: list[str] = []
+
+
+@router.get("/usage")
+async def usage(request: Request, q: Annotated[UsageQuery, Query()]):
+    """Calls, tokens, cost and errors from chat_log, optionally grouped, e.g. ?src=vega&since=…&group_by=model,day"""
+    rt = _rt(request)
+
+    def split(values: list[str]) -> list[str]:
+        return list(dict.fromkeys(v.strip() for value in values for v in value.split(",") if v.strip()))
+
+    group_by = split(q.group_by)
+    unknown = [g for g in group_by if g not in USAGE_GROUPS]
+    if unknown:
+        return _error_response(ProviderError(
+            400, f"Unknown group_by {', '.join(unknown)}; allowed: {', '.join(USAGE_GROUPS)}", "invalid_request_error"))
+    try:
+        zone = ZoneInfo(q.tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        return _error_response(ProviderError(400, f"Unknown time zone {q.tz!r}", "invalid_request_error"))
+    since, until = (t if t is None or t.tzinfo else t.replace(tzinfo=zone) for t in (q.since, q.until))
+    filters = {name: split(getattr(q, name)) for name in USAGE_FILTERS}
+    filters = {name: values for name, values in filters.items() if values}
+
+    statements, params = usage_sql(group_by, filters, since, until, q.tz, q.limit)
+    try:
+        results = await asyncio.to_thread(rt.chat_log.query, statements, params)
+    except (psycopg.OperationalError, PoolTimeout) as e:
+        log.warning("usage query failed: %s: %s", type(e).__name__, e)
+        return _error_response(ProviderError(503, f"The chat_log database is unavailable ({type(e).__name__})",
+                                             "service_unavailable"))
+    return {
+        "object": "usage",
+        "since": since.isoformat() if since else None,
+        "until": until.isoformat() if until else None,
+        "tz": q.tz,
+        "filters": filters,
+        "group_by": group_by,
+        **usage_result(group_by, results, q.limit),
     }

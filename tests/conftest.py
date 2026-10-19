@@ -20,14 +20,21 @@ SHOW = {
     "llama3.2:latest": {"capabilities": ["completion", "tools"], "model_info": {"llama.context_length": 131072}},
     "gpt-oss:20b": {"capabilities": ["completion", "tools", "thinking"], "model_info": {"gptoss.context_length": 131072}},
     "tiny:1b": {"capabilities": ["completion"], "model_info": {"llama.context_length": 8192}},
+    "nomic-embed-text:latest": {"capabilities": ["embedding"], "model_info": {"nomic-bert.context_length": 2048}},
 }
 
 
+def fake_vector(text: str, dimensions: int = 4) -> list[float]:
+    """What FakeOllama returns for `text`; exact in float32, so base64 round trips compare equal."""
+    return [float(len(text)), 0.5, -0.25, 1.0][:dimensions]
+
+
 class FakeOllama:
-    """Records /api/chat payloads and answers with `reply` (a message dict)."""
+    """Records /api/chat and /api/embed payloads; chat answers with `reply` (a message dict)."""
 
     def __init__(self):
         self.payloads: list[dict] = []
+        self.embed_payloads: list[dict] = []
         self.reply: dict = {"role": "assistant", "content": "hello"}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -60,6 +67,15 @@ class FakeOllama:
                 lines.append({"message": {"role": "assistant", "content": "", "tool_calls": self.reply["tool_calls"]}, "done": False})
             lines.append({"message": {"role": "assistant", "content": ""}, **done})
             return httpx.Response(200, content="\n".join(json.dumps(x) for x in lines).encode())
+        if path == "/api/embed":
+            payload = json.loads(request.content)
+            self.embed_payloads.append(payload)
+            return httpx.Response(200, json={
+                "model": payload["model"],
+                "embeddings": [fake_vector(text, payload.get("dimensions", 4)) for text in payload["input"]],
+                "prompt_eval_count": sum(len(text.split()) for text in payload["input"]),
+                "load_duration": 1_000_000, "total_duration": 5_000_000,
+            })
         return httpx.Response(404, json={"error": "unexpected path"})
 
 
@@ -104,14 +120,22 @@ class FakeOpenRouter:
 
 
 class ListLog:
+    """Stands in for ChatLogWriter: rows go to a list, and `query` returns `results`."""
+
     def __init__(self):
         self.rows: list[dict] = []
+        self.queries: list[tuple[list[str], dict]] = []
+        self.results: list[list[dict]] = []
 
     def enqueue(self, row: dict) -> None:
         self.rows.append(row)
 
     def ping(self) -> bool:
         return True
+
+    def query(self, statements: list[str], params: dict) -> list[list[dict]]:
+        self.queries.append((statements, params))
+        return self.results[: len(statements)]
 
 
 @pytest.fixture

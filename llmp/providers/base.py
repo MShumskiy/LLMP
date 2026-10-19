@@ -1,8 +1,9 @@
 """
 The provider interface behind /v1.
 
-Requests and responses are plain dicts in the OpenAI Chat Completions shape.
-`model` arguments are the provider's own id, without the "<provider>/" prefix.
+Requests and responses are plain dicts in the OpenAI Chat Completions and
+Embeddings shapes. `model` arguments are the provider's own id, without the
+"<provider>/" prefix.
 """
 
 from __future__ import annotations
@@ -34,6 +35,10 @@ class Provider(Protocol):
     async def chat(self, model: str, body: dict, opts: dict) -> dict: ...
 
     def chat_stream(self, model: str, body: dict, opts: dict) -> AsyncIterator[dict]: ...
+
+    async def embed(self, model: str, body: dict, opts: dict) -> dict:
+        """An OpenAI embeddings response with float vectors; /v1 handles encoding_format."""
+        ...
 
     async def health(self) -> bool: ...
 

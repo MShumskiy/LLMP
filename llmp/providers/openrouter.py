@@ -128,6 +128,12 @@ class OpenRouterProvider:
             except httpx.HTTPError as e:
                 raise connection_error("OpenRouter", e) from e
 
+    async def embed(self, model: str, body: dict, opts: dict) -> dict:
+        raise ProviderError(
+            400, "Embeddings are not available for OpenRouter models yet; use an ollama/ embedding model",
+            "invalid_request_error", "model_not_supported",
+        )
+
 
 def _pricing(p: dict) -> dict:
     """OpenRouter prices are USD per token, as strings. Return USD per million tokens."""

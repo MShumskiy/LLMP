@@ -1,6 +1,7 @@
 """
 Ollama adapter. Translates OpenAI Chat Completions to and from Ollama's native
-/api/chat, which (unlike Ollama's /v1 endpoint) takes num_ctx and keep_alive per request.
+/api/chat, which (unlike Ollama's /v1 endpoint) takes num_ctx and keep_alive per
+request, and OpenAI embeddings to and from the native /api/embed.
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ class OllamaProvider:
         self._num_ctx_per_model = settings.ollama_num_ctx_per_model
         self._max_output = settings.ollama_max_output_per_model
         self._sem = asyncio.Semaphore(settings.ollama_max_concurrency)
+        # Embedding calls are short and use a small, separate model, so they get their
+        # own slots instead of queueing behind long chat generations.
+        self._embed_sem = asyncio.Semaphore(settings.ollama_max_concurrency)
         self._show_cache: dict[str, dict] = {}
 
     # ── Catalog ────────────────────────────────────────────────────────────────
@@ -162,6 +166,47 @@ class OllamaProvider:
                             return
             except httpx.HTTPError as e:
                 raise connection_error("Ollama", e) from e
+
+    # ── Embeddings ─────────────────────────────────────────────────────────────
+
+    async def embed(self, model: str, body: dict, opts: dict) -> dict:
+        inputs = body.get("input")
+        inputs = [inputs] if isinstance(inputs, str) else inputs
+        if not inputs:
+            raise ProviderError(400, "input must be a string or a non-empty list of strings", "invalid_request_error")
+        if not all(isinstance(x, str) for x in inputs):
+            raise ProviderError(400, "Token-id input is not supported for Ollama models; send text", "invalid_request_error")
+        show = await self.show(model)  # also turns an unknown model into a 404
+        if "embedding" not in (show.get("capabilities") or []):
+            raise ProviderError(
+                400, f"ollama/{model} is not an embedding model", "invalid_request_error", "model_not_supported")
+
+        payload: dict = {
+            "model": model,
+            "input": inputs,
+            "keep_alive": self._keep_alive if opts.get("keep_alive") is None else opts["keep_alive"],
+            "options": {**(opts.get("options") or {}), "num_ctx": self._num_ctx_for(model, show, opts.get("num_ctx"))},
+        }
+        if body.get("dimensions"):
+            payload["dimensions"] = body["dimensions"]
+        if opts.get("truncate") is not None:  # Ollama truncates long inputs unless told not to
+            payload["truncate"] = bool(opts["truncate"])
+        async with self._embed_sem:
+            data = await self._request("POST", "/api/embed", json=payload)
+
+        tokens = data.get("prompt_eval_count") or 0
+        load = data.get("load_duration")
+        return {
+            "object": "list",
+            "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(data.get("embeddings") or [])],
+            "model": f"ollama/{model}",
+            "usage": {"prompt_tokens": tokens, "total_tokens": tokens, "cost": 0.0},
+            "llmp": {
+                "load_ms": round(load / 1e6) if load is not None else None,
+                "num_ctx": payload["options"]["num_ctx"],
+                "keep_alive": payload["keep_alive"],
+            },
+        }
 
     # ── Translation ────────────────────────────────────────────────────────────
 
