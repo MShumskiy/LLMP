@@ -1,35 +1,69 @@
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
-from pydantic import BaseModel
-from dotenv import load_dotenv
-import os
-from llmp.model_operator import ModelOperatorOllama
+import logging
+import threading
+from contextlib import asynccontextmanager
+
 import uvicorn
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-load_dotenv()
-auth_key = os.getenv('authentication_key')
-allowed_ips_env = os.getenv("ALLOWED_IPS")
-allowed_ips = allowed_ips_env.split(",")
-allowed_ips = {ip for ip in allowed_ips}
+from llmp import v1
+from llmp.auth import authenticate
+from llmp.config import settings
+from llmp.model_operator import ModelOperatorOllama
 
-app = FastAPI()
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# initialize model operator
-model_operator = ModelOperatorOllama()
 
-# Authentication dependency
-def authenticate(request: Request,
-                 credentials: str = Header(None,alias='Authorization')):
-    
-    client_ip = request.client.host
-    
-    if credentials is None:
-        raise HTTPException(status_code = 401, detail = 'Missing credentials')
-    if credentials != auth_key:
-        raise HTTPException(status_code = 403, detail = 'Invalid credentials')
-    if client_ip not in allowed_ips:
-        raise HTTPException(status_code=403, detail=f"Access denied for IP: {client_ip}")
-    
-    return credentials
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.llmp = v1.start_runtime(settings)
+    yield
+    await v1.stop_runtime(app.state.llmp)
+
+
+app = FastAPI(title="LLMP", lifespan=lifespan)
+app.include_router(v1.router)
+
+
+# /v1 errors use the OpenAI body shape ({"error": {...}}); the legacy routes keep FastAPI's.
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException):
+    if request.url.path.startswith("/v1/"):
+        kind = {401: "authentication_error", 403: "permission_error", 404: "not_found_error"}.get(
+            exc.status_code, "invalid_request_error")
+        error = {"message": str(exc.detail), "type": kind, "param": None, "code": None}
+        return JSONResponse({"error": error}, status_code=exc.status_code, headers=exc.headers)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/v1/"):
+        message = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+        error = {"message": message, "type": "invalid_request_error", "param": None, "code": None}
+        return JSONResponse({"error": error}, status_code=400)
+    return await request_validation_exception_handler(request, exc)
+
+
+# ── Legacy API (/generate, /models) ────────────────────────────────────────────
+
+_model_operator = None
+_model_operator_lock = threading.Lock()
+
+
+def get_model_operator() -> ModelOperatorOllama:
+    """Created on first use, so /v1 still starts when the legacy path can't connect."""
+    global _model_operator
+    with _model_operator_lock:
+        if _model_operator is None:
+            _model_operator = ModelOperatorOllama()
+        return _model_operator
+
 
 class GenerateRequest(BaseModel):
     model: str
@@ -42,14 +76,14 @@ class GenerateRequest(BaseModel):
     temperature: float = 0.5
     max_gen_lenght: int = -1
     provider: str = "ollama"   # "ollama" | "openrouter"
-    
+
 
 @app.get("/models", dependencies=[Depends(authenticate)])
 def list_models():
     """
     Endpoint to get list of available models.
     """
-    return model_operator.list_models()
+    return get_model_operator().list_models()
 
 @app.post("/generate", dependencies=[Depends(authenticate)])
 def generate_response(request: Request, body: GenerateRequest):
@@ -59,6 +93,7 @@ def generate_response(request: Request, body: GenerateRequest):
     """
     ip_address = request.client.host
     try:
+        model_operator = get_model_operator()
         if body.provider == "openrouter":
             response = model_operator.generate_openrouter(
                 model=body.model,
@@ -85,7 +120,6 @@ def generate_response(request: Request, body: GenerateRequest):
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate response: {e}")
-    
+
 def run():
     uvicorn.run("llmp.main:app", host="0.0.0.0", port=8000, reload=False)
-    

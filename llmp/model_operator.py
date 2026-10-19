@@ -166,14 +166,15 @@ class ModelOperatorOllama():
         now = datetime.datetime.now()
         timestamp = now.isoformat()
         created = int(now.timestamp())
-        if model in self.model_list:
-            self.model = model
-        else:
+        if model not in self.model_list:
+            # pick up models pulled since startup
+            self.model_list = self.list_models()
+        if model not in self.model_list:
             raise ValueError(f"Model '{model}' not provided or not found in available models: {self.model_list}")
         
         
         payload = {
-            "model": self.model,
+            "model": model,
             "keep_alive": 0,
             "messages": [
                 {'role':'system',
@@ -201,15 +202,11 @@ class ModelOperatorOllama():
             #payload["model"] = 'llava:latest'
                 
             #payload.update({'images':encoded_image})
-        
-        if format:
-            payload.update(format)
-            
 
         headers = {"Content-Type": "application/json"}
         
         print(f"[INFO] Sending request to Ollama: {self.url}chat")
-        print(f"[INFO] Model: {self.model} | Temperature: {temperature}")
+        print(f"[INFO] Model: {model} | Temperature: {temperature}")
         response = requests.post(f"{self.url}chat", data=json.dumps(payload), headers=headers)
         print(f"[INFO] Response status: {response.status_code}")
         raw = response.json()

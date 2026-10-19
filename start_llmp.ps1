@@ -110,7 +110,7 @@ try {
     Write-Host "=" * 50
     
     # Run LLMP in foreground so we can see logs and stop with Ctrl+C
-    poetry run uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    poetry run uvicorn llmp.main:app --host 0.0.0.0 --port 8000 --reload
     
 } catch {
     Write-Host "❌ Error occurred: $($_.Exception.Message)" -ForegroundColor Red
