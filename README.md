@@ -175,10 +175,10 @@ How the providers are handled:
 - **OpenRouter** requests are passed through with the prefix stripped and `usage.include` set, so the cost comes back. `reasoning` and `cache_control` parts pass through unchanged.
 - **Ollama** requests go to the native `/api/chat`. Data-URL images become `images`, tool-call arguments come back as JSON strings with ids `call_<n>`, `reasoning` becomes `think`, and the model's thinking comes back as `reasoning`. Calls use `keep_alive` 30m and `num_ctx` 32768 by default (both set in `llmp.toml`), so the model stays loaded between agent steps.
 - At most 2 Ollama and 16 OpenRouter calls run at once (also set in `llmp.toml`); further calls queue. Ollama embedding calls have their own 2 slots, so they don't wait behind long generations.
-- **Embeddings** go to Ollama's native `/api/embed` with the same `keep_alive` and `num_ctx` defaults (`num_ctx` capped at the model's context). The OpenAI SDK asks for `base64` by default and decodes it itself.
+- **Embeddings** go to Ollama's native `/api/embed` with the same `keep_alive` default and `num_ctx` 8192 (`embed_num_ctx` in `llmp.toml`, capped at the model's context; `llmp.num_ctx` overrides it). A smaller context keeps an embedding model's VRAM small while it stays loaded. The OpenAI SDK asks for `base64` by default and decodes it itself.
 
 ```python
-r = await client.embeddings.create(model="ollama/nomic-embed-text", input=["first text", "second text"])
+r = await client.embeddings.create(model="ollama/qwen3-embedding:0.6b", input=["first text", "second text"])
 vectors = [d.embedding for d in r.data]          # r.usage.prompt_tokens counts the input
 ```
 

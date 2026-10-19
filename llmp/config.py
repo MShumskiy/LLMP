@@ -40,6 +40,7 @@ class Settings:
     ollama_url: str
     ollama_keep_alive: str
     ollama_num_ctx: int
+    ollama_embed_num_ctx: int
     ollama_num_ctx_per_model: dict[str, int]
     ollama_max_output_per_model: dict[str, int]
     ollama_max_concurrency: int
@@ -62,6 +63,7 @@ def load_settings() -> Settings:
         ollama_url=_ollama_root(os.getenv("url")),
         ollama_keep_alive=str(ollama.get("keep_alive", "30m")),
         ollama_num_ctx=int(ollama.get("num_ctx", 32768)),
+        ollama_embed_num_ctx=int(ollama.get("embed_num_ctx", 8192)),
         ollama_num_ctx_per_model=dict(ollama.get("num_ctx_per_model", {})),
         ollama_max_output_per_model=dict(ollama.get("max_output_per_model", {})),
         ollama_max_concurrency=int(ollama.get("max_concurrency", 2)),

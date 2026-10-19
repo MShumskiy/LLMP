@@ -27,6 +27,7 @@ class OllamaProvider:
         self._base = settings.ollama_url
         self._keep_alive = settings.ollama_keep_alive
         self._num_ctx = settings.ollama_num_ctx
+        self._embed_num_ctx = settings.ollama_embed_num_ctx
         self._num_ctx_per_model = settings.ollama_num_ctx_per_model
         self._max_output = settings.ollama_max_output_per_model
         self._sem = asyncio.Semaphore(settings.ollama_max_concurrency)
@@ -73,7 +74,8 @@ class OllamaProvider:
                 "loaded": name in loaded,
                 "context_window": _context_length(show),
                 "max_output": self._max_output.get(name),
-                "default_num_ctx": self._num_ctx_for(name, show, None),
+                "default_num_ctx": self._num_ctx_for(
+                    name, show, None, self._embed_num_ctx if "embedding" in caps and "completion" not in caps else None),
                 "capabilities": {
                     "tools": "tools" in caps,
                     "vision": "vision" in caps,
@@ -181,11 +183,13 @@ class OllamaProvider:
             raise ProviderError(
                 400, f"ollama/{model} is not an embedding model", "invalid_request_error", "model_not_supported")
 
+        # Embedding inputs are short, and the context is VRAM held for as long as the model stays loaded.
+        num_ctx = self._num_ctx_for(model, show, opts.get("num_ctx"), default=self._embed_num_ctx)
         payload: dict = {
             "model": model,
             "input": inputs,
             "keep_alive": self._keep_alive if opts.get("keep_alive") is None else opts["keep_alive"],
-            "options": {**(opts.get("options") or {}), "num_ctx": self._num_ctx_for(model, show, opts.get("num_ctx"))},
+            "options": {**(opts.get("options") or {}), "num_ctx": num_ctx},
         }
         if body.get("dimensions"):
             payload["dimensions"] = body["dimensions"]
@@ -245,8 +249,8 @@ class OllamaProvider:
         payload["options"] = options
         return payload
 
-    def _num_ctx_for(self, model: str, show: dict, requested: int | None) -> int:
-        num_ctx = int(requested or self._num_ctx_per_model.get(model) or self._num_ctx)
+    def _num_ctx_for(self, model: str, show: dict, requested: int | None, default: int | None = None) -> int:
+        num_ctx = int(requested or self._num_ctx_per_model.get(model) or default or self._num_ctx)
         limit = _context_length(show)
         return min(num_ctx, limit) if limit else num_ctx
 

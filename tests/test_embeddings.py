@@ -35,6 +35,17 @@ def test_embeddings_float_response_and_log(api, fakes):
     assert row["response"] == {"n": 2, "dimensions": 4}  # never the vectors
 
 
+def test_embeddings_use_a_smaller_default_context(api, fakes):
+    client, _ = api
+    for llmp in ({}, {"num_ctx": 16384}):
+        assert client.post("/v1/embeddings", json={"model": "ollama/qwen3-embedding:0.6b", "input": "x",
+                                                   "llmp": llmp}).status_code == 200
+    assert [p["options"]["num_ctx"] for p in fakes[0].embed_payloads] == [8192, 16384]
+    catalog = {m["id"]: m for m in client.get("/v1/models").json()["data"]}
+    assert catalog["ollama/qwen3-embedding:0.6b"]["default_num_ctx"] == 8192
+    assert catalog["ollama/llama3.2:latest"]["default_num_ctx"] == 32768
+
+
 def test_embeddings_meta_mode_stores_no_input(api):
     client, rows = api
     r = client.post("/v1/embeddings", json={"model": EMBED, "input": "secret text", "llmp": {"log": "meta"}})

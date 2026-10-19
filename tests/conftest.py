@@ -21,6 +21,7 @@ SHOW = {
     "gpt-oss:20b": {"capabilities": ["completion", "tools", "thinking"], "model_info": {"gptoss.context_length": 131072}},
     "tiny:1b": {"capabilities": ["completion"], "model_info": {"llama.context_length": 8192}},
     "nomic-embed-text:latest": {"capabilities": ["embedding"], "model_info": {"nomic-bert.context_length": 2048}},
+    "qwen3-embedding:0.6b": {"capabilities": ["embedding"], "model_info": {"qwen3.context_length": 32768}},
 }
 
 
